@@ -30,27 +30,22 @@ export default function Graph3D({ data }) {
       <ForceGraph3D
         ref={fg}
         graphData={data || dummyData}
-        nodeRelSize={6} // sphere radius scaling
+        nodeVal="val"
+        nodeThreeObjectExtend={true}
         nodeThreeObject={(node) => {
-          // group: sphere + label
           const group = new THREE.Group();
-
-          const sphere = new THREE.Mesh(
-            new THREE.SphereGeometry(4),
-            new THREE.MeshBasicMaterial({ color: node.color || "#1e90ff" })
-          );
-          group.add(sphere);
-
-          const label = new SpriteText(node.id);
-          label.material.depthWrite = false; // no z-fight
+          // label sprite
+          const labelText = node.weight !== undefined
+            ? `${node.id} (${node.weight.toFixed(2)})`
+            : node.id;
+          const label = new SpriteText(labelText);
+          label.material.depthWrite = false;
           label.color = "white";
           label.textHeight = 4;
-          label.position.set(0, 6, 0); // float above sphere
+          label.position.set(0, 6, 0);
           group.add(label);
-
           return group;
         }}
-        nodeThreeObjectExtend={false} // replace default sphere
       />
     </div>
   );
