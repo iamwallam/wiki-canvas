@@ -231,6 +231,7 @@ export default function HandTracker({
       borderRadius: '8px',
       overflow: 'hidden',
       backdropFilter: 'blur(3px)',
+      backgroundColor: 'rgba(255,255,255,0.1)',
     }}>
       <video
         ref={videoRef}
