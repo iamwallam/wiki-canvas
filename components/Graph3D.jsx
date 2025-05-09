@@ -3,6 +3,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import SpriteText from "three-spritetext";
+import { fontSizeFromWeight } from "@/lib/wiki";
 
 const ForceGraph3D = dynamic(() => import("react-force-graph-3d"), {
   ssr: false,
@@ -31,20 +32,17 @@ export default function Graph3D({ data }) {
         ref={fg}
         graphData={data || dummyData}
         nodeVal="val"
-        nodeThreeObjectExtend={true}
+        nodeThreeObjectExtend={false}
         nodeThreeObject={(node) => {
-          const group = new THREE.Group();
-          // label sprite
-          const labelText = node.weight !== undefined
-            ? `${node.id} (${node.weight.toFixed(2)})`
-            : node.id;
+          const labelText = node.id;
           const label = new SpriteText(labelText);
           label.material.depthWrite = false;
           label.color = "white";
-          label.textHeight = 4;
-          label.position.set(0, 6, 0);
-          group.add(label);
-          return group;
+          // use weight if present, else fallback 0.3
+          label.textHeight = fontSizeFromWeight(
+            typeof node.weight === "number" ? node.weight : 0.3
+          );
+          return label; // a SpriteText IS a Three object
         }}
       />
     </div>
