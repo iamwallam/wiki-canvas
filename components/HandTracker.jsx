@@ -196,9 +196,9 @@ export default function HandTracker({ onPinch, onPinchMove }) {
 
         handsInstance.setOptions({
           maxNumHands: 1,
-          modelComplexity: 0,
-          minDetectionConfidence: 0.7,
-          minTrackingConfidence: 0.7,
+          modelComplexity: 1,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5,
         });
         handsInstance.onResults(onResults);
         handsRef.current = handsInstance;
