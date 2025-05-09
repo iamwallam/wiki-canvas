@@ -37,7 +37,7 @@ export async function POST(req) {
     // We'll use the ranked link titles here.
     const graphDataInput = {
       summary: wikiData.summary,
-      links: rankedLinkObjects.map(r => r.title) // Extract titles from ranked objects
+      links: rankedLinkObjects    // Now passing the full objects with title & weight
     };
 
     const graph = toGraph(title, graphDataInput);
