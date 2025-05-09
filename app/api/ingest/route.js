@@ -1,5 +1,6 @@
 import { titleFromUrl, fetchPageData, toGraph } from "@/lib/wiki";
 import { rankLinks } from "@/lib/llm"; // Your OpenRouter/Gemini ranking function
+console.log("INGEST env.OPENROUTER_KEY:", process.env.OPENROUTER_KEY);
 
 export const runtime = "edge"; // Specify Edge runtime
 
@@ -28,6 +29,8 @@ export async function POST(req) {
       wikiData.links,           // Array of link titles
       title                     // The article title
     );
+
+    console.log("Ranked Link Objects from LLM:", JSON.stringify(rankedLinkObjects, null, 2));
 
     // Prepare data for the toGraph function
     // toGraph expects: (rootTitle, data) where data is { summary, links (array of titles) }
