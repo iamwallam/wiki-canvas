@@ -2,8 +2,8 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import * as THREE from "three";
 import Graph3D from "@/components/Graph3D";
-import UrlForm from "@/components/UrlForm";
 import HandTracker from "@/components/HandTracker";
+import WelcomePage from "@/components/WelcomePage";
 
 // --- Timing constants for the visual cursor ---
 const HIDE_CURSOR_AFTER_MS = 200; // How long after last pinch move to start fading out
@@ -37,36 +37,68 @@ export default function Home() {
   const [hoverId, setHoverId] = useState(null);
   const fgRef = useRef(null);
 
-  // --- NEW state and refs for the DOM visual cursor ---
+  // --- State for Welcome Page and Graph View ---
+  const [showWelcomePage, setShowWelcomePage] = useState(true);
+  const [isGraphContainerVisible, setIsGraphContainerVisible] = useState(false);
+
+  // --- Visual cursor state ---
   const [isCursorVisible, setIsCursorVisible] = useState(false);
   const [cursorOpacity, setCursorOpacity] = useState(0);
   const [cursorPosition, setCursorPosition] = useState({ x: 0, y: 0 });
-
   const cursorFadeOutTimerRef = useRef(null);
   const cursorRemoveTimerRef = useRef(null);
-  // --- End of NEW state and refs ---
-
+  
   // Ref for two-handed gesture state
-  const twoHandBaseMetricsRef = useRef(null); // Stores { distance, centroid, initialCameraQuaternion, initialControlsTarget, etc. }
+  const twoHandBaseMetricsRef = useRef(null);
 
   const handleNewGraphData = (g) => {
     setGraph(prev => mergeGraphData(prev, g));
   };
 
+  // Function to be called by WelcomePage to load graph
+  const loadGraphFromUrl = async (url) => {
+    // No need for setIsLoading here as WelcomePage handles its own loading state
+    try {
+      const res = await fetch("/api/ingest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      if (!res.ok) {
+        const errorData = await res.json();
+        // This error will be caught by WelcomePage's submit handler
+        throw new Error(errorData.error || "Failed to fetch graph data. Please check the URL or try again.");
+      }
+      const newGraphData = await res.json();
+      if (newGraphData.nodes && newGraphData.nodes.length > 0) {
+        handleNewGraphData(newGraphData);
+        setShowWelcomePage(false); // This will unmount WelcomePage
+
+        // Delay showing graph to allow WelcomePage to unmount and for a smoother visual transition
+        setTimeout(() => {
+          setIsGraphContainerVisible(true); // Start fading in graph container
+        }, 150); // Adjust delay as needed for visual smoothness (e.g., match WelcomePage fade out if it had one)
+      } else {
+         throw new Error("No graph data found for this URL. It might be a disambiguation page or an invalid link.");
+      }
+    } catch (error) {
+      console.error("Error in loadGraphFromUrl:", error);
+      // Re-throw the error so WelcomePage can display it
+      throw error;
+    }
+  };
+  
   // Old handlePinch (for fist gestures) is kept but will be commented out from HandTracker props
   const handlePinch = useCallback(({ x, y, double }) => {
     console.log(`Fist gesture detected (double: ${double}) at x: ${x}, y: ${y}. Actions currently disabled.`);
     if (!fgRef.current || !graph) { return; }
-    const camera = fgRef.current.camera();
-    const scene = fgRef.current.scene();
-    if (!camera || !scene) { return; }
-    // --- ALL FIST ACTION LOGIC REMAINS COMMENTED OUT ---
+    // ... (rest of fist logic remains commented out)
   }, [graph]);
 
   const handleHoverPinchMove = useCallback(({ x, y, twoHandsDetected }) => {
-    // Only proceed with cursor and hover logic if we don't have two hands detected
     if (twoHandsDetected) {
-      setIsCursorVisible(false);
+      setIsCursorVisible(false); // Hide cursor if two hands are detected
+      setHoverId(null); // Clear hover
       return;
     }
 
@@ -74,10 +106,9 @@ export default function Home() {
     if (fgRef.current) {
       const camera = fgRef.current.camera();
       const scene = fgRef.current.scene();
-
       if (camera && scene) {
         const raycaster = new THREE.Raycaster();
-        const ndc = { x: 1 - 2 * x, y: 1 - 2 * y };
+        const ndc = { x: 1 - 2 * x, y: 1 - 2 * y }; // Inverted X for direct mapping
         raycaster.setFromCamera(ndc, camera);
         const intersects = raycaster.intersectObjects(scene.children, true);
         const hit = intersects.find(i => i.object.userData?.node);
@@ -87,14 +118,17 @@ export default function Home() {
 
     setHoverId(prevHoverId => {
       if (prevHoverId !== calculatedNewHoverId) {
-        console.log('[PARENT] hoverId changing. Old:', prevHoverId, 'New:', calculatedNewHoverId);
         return calculatedNewHoverId;
       }
       return prevHoverId;
     });
 
-    // --- Cursor visibility logic ---
-    setCursorPosition({ x, y });
+    const dampingFactor = 0.5; 
+    setCursorPosition(prevPos => ({ 
+      x: prevPos.x + (x - prevPos.x) * dampingFactor,
+      y: prevPos.y + (y - prevPos.y) * dampingFactor 
+    }));
+    
     setIsCursorVisible(true);
     requestAnimationFrame(() => {
       setCursorOpacity(1);
@@ -107,126 +141,54 @@ export default function Home() {
         setIsCursorVisible(false);
       }, CURSOR_FADE_DURATION_MS);
     }, HIDE_CURSOR_AFTER_MS);
-    // --- End cursor visibility logic ---
-
   }, []);
 
-  // --- NEW: Handler for Two-Handed Pinch Gestures ---
   const handleTwoHandPinchGesture = useCallback(({ hand0, hand1, phase }) => {
     if (!fgRef.current) return;
     const camera = fgRef.current.camera();
-    const controls = fgRef.current.controls(); // Assuming OrbitControls
+    const controls = fgRef.current.controls();
 
-    if (!camera || !controls) {
-      console.warn("Camera or Controls not available for two-handed gesture.");
-      return;
-    }
-
-    console.log("[Pinch Start] Received hand0:", JSON.stringify(hand0), "hand1:", JSON.stringify(hand1));
+    if (!camera || !controls) return;
 
     const p0 = new THREE.Vector2(hand0.x, hand0.y); 
     const p1 = new THREE.Vector2(hand1.x, hand1.y); 
 
-    console.log("[Pinch Start] Calculated p0:", p0.x, p0.y, "p1:", p1.x, p1.y);
-
     if (phase === 'start') {
       const distance = p0.distanceTo(p1);
-      console.log("[Pinch Start] Calculated distance:", distance);
-
       const centroidVec = new THREE.Vector2().addVectors(p0, p1).multiplyScalar(0.5);
-      console.log("[Pinch Start] Calculated centroid X:", centroidVec.x, "Y:", centroidVec.y);
-      
-      twoHandBaseMetricsRef.current = {
-        distance: distance, 
-        centroid: centroidVec, 
-      };
-      console.log("[Pinch Start] Assigned to twoHandBaseMetricsRef.current:", JSON.stringify(twoHandBaseMetricsRef.current));
-      
-      // --- UNCOMMENT AND TEST THIS LINE ---
-      console.log("[Pinch Start] Attempting controls.saveState()...");
+      twoHandBaseMetricsRef.current = { distance, centroid: centroidVec };
       controls.saveState(); 
-      console.log("[Pinch Start] controls.saveState() completed.");
-      // --- END OF UNCOMMENTED SECTION ---
-
-      console.log("Two-hand gesture: START processed in page.js (all parts active)");
-    } 
-    // --- UNCOMMENT 'move' and 'end' phases ---
-    else if (phase === 'move' && twoHandBaseMetricsRef.current) {
-      console.log("[Pinch Handler] 'move' phase entered."); // Add log for 'move'
+    } else if (phase === 'move' && twoHandBaseMetricsRef.current) {
       const currentDistance = p0.distanceTo(p1);
       const currentCentroid = new THREE.Vector2().addVectors(p0, p1).multiplyScalar(0.5);
       const base = twoHandBaseMetricsRef.current;
 
-      // --- Zoom Logic (Distance Change) ---
       const deltaDistance = currentDistance - base.distance;
-      let ZOOM_SENSITIVITY = -300; // Inverted sensitivity for natural pinch-zoom behavior
-      const ZOOM_THRESHOLD = 0.0; // Keep at 0 for now, or small like 0.001 later
+      const ZOOM_SENSITIVITY = -300; 
+      const zoomAmount = deltaDistance * ZOOM_SENSITIVITY;
+      camera.translateZ(zoomAmount); 
 
-      if (Math.abs(deltaDistance) > ZOOM_THRESHOLD) {
-          const zoomAmount = deltaDistance * ZOOM_SENSITIVITY;
-          console.log(`[Pinch Move] Zooming. DeltaDistance: ${deltaDistance.toFixed(4)}, ZoomAmount (translateZ): ${zoomAmount.toFixed(4)}`);
-          camera.translateZ(zoomAmount); 
-      }
-
-      // --- Pan Logic (Centroid Movement) ---
       const deltaCentroid = new THREE.Vector2().subVectors(currentCentroid, base.centroid);
-      let PAN_SENSITIVITY = 150; // Increased from 10 to 20 for more responsive panning
-      const PAN_THRESHOLD = 0.0;
+      const PAN_SENSITIVITY = 20; // Current pan sensitivity
+      let panDistanceFactor = controls.target.distanceTo(camera.position);
+      panDistanceFactor = Math.max(0.5, Math.min(panDistanceFactor * 0.02, 20));
 
-      if (Math.abs(deltaCentroid.x) > PAN_THRESHOLD || Math.abs(deltaCentroid.y) > PAN_THRESHOLD) {
-          console.log(`[Pinch Move] Panning, deltaCentroid (raw): dx=${deltaCentroid.x.toFixed(4)}, dy=${deltaCentroid.y.toFixed(4)}`);
-          const cameraX = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorldInverse, 0).negate();
-          const cameraY = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorldInverse, 1);
-          
-          // Refined panDistanceFactor:
-          // This factor tries to make pan speed consistent regardless of zoom level.
-          // It uses the distance to the point the camera is looking at (controls.target).
-          let panDistanceFactor = controls.target.distanceTo(camera.position);
-          // Clamp the factor to avoid extreme values if too close or too far.
-          panDistanceFactor = Math.max(0.5, Math.min(panDistanceFactor * 0.02, 20)); // Tune 0.02 and 20
-
-          console.log(`[Pinch Move] Panning, panDistanceFactor: ${panDistanceFactor.toFixed(4)}`);
-
-          const panOffset = new THREE.Vector3();
-          // Note: The sign of deltaCentroid.x might need to be flipped depending on handedness or desired mapping.
-          panOffset.addScaledVector(cameraX, -deltaCentroid.x * PAN_SENSITIVITY * panDistanceFactor);
-          panOffset.addScaledVector(cameraY, deltaCentroid.y * PAN_SENSITIVITY * panDistanceFactor);
-          
-          console.log(`[Pinch Move] Panning, panOffset: x=${panOffset.x.toFixed(4)}, y=${panOffset.y.toFixed(4)}, z=${panOffset.z.toFixed(4)}`);
-
-          camera.position.add(panOffset);
-          controls.target.add(panOffset);
-      }
+      const cameraX = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorldInverse, 0).negate();
+      const cameraY = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorldInverse, 1);
+      const panOffset = new THREE.Vector3();
+      panOffset.addScaledVector(cameraX, -deltaCentroid.x * PAN_SENSITIVITY * panDistanceFactor);
+      panOffset.addScaledVector(cameraY, deltaCentroid.y * PAN_SENSITIVITY * panDistanceFactor);
+      camera.position.add(panOffset);
+      controls.target.add(panOffset);
       
       controls.update(); 
-
       twoHandBaseMetricsRef.current.distance = currentDistance;
       twoHandBaseMetricsRef.current.centroid.copy(currentCentroid);
-
     } else if (phase === 'end') {
-      console.log("[Pinch Handler] 'end' phase entered.");
-      console.log("Two-hand gesture: END processed in page.js");
       twoHandBaseMetricsRef.current = null;
-      // controls.reset(); // Optional: Resets to the state saved by saveState()
-                          // If you want the camera to stay, don't call reset().
-                          // Call controls.update() one last time if not resetting
-                          // and if state might have changed that needs final application.
-      if(controls && typeof controls.update === 'function' && !twoHandBaseMetricsRef.current /* implying reset wasn't called or we want to finalize */) {
-          // It's good practice to call update if controls might have changed
-          // but reset() usually handles this implicitly by reverting and updating.
-          // If not resetting, a final update might be good.
-          // For now, let's test with controls.reset() commented out to see where the gesture leaves the camera.
-          // If you enable controls.reset(), it will snap back to where it was at 'start'.
-          console.log("[Pinch End] OrbitControls state will remain as is.");
-      }
+      // controls.reset(); // Optional reset
     }
-  }, []); // Empty dependency array as fgRef, setters, and refs are stable.
-
-  useEffect(() => {
-    if (hoverId !== null) {
-      // console.log(`app/page.js: Actual hoverId state is now: ${hoverId}`);
-    }
-  }, [hoverId]);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -237,35 +199,29 @@ export default function Home() {
 
   return (
     <>
-      <UrlForm onGraph={handleNewGraphData} />
-      <Graph3D ref={fgRef} data={graph} hoverId={hoverId} />
-      <HandTracker
-        // onPinch={handlePinch} // Old fist gesture handler - COMMENTED OUT
-        onHoverPinchMove={handleHoverPinchMove}
-        onTwoHandPinchGesture={handleTwoHandPinchGesture} // NEW PROP
-      />
-
-      {/* --- DOM CURSOR ELEMENT --- */}
-      {isCursorVisible && (
-        <div
-          style={{
-            position: 'fixed',
-            left: `${(1 - cursorPosition.x) * 100}%`,
-            top: `${cursorPosition.y * 100}%`,
-            width: '24px',
-            height: '24px',
-            backgroundColor: 'rgba(0, 220, 255, 0.4)',
-            border: '2px solid rgba(0, 220, 255, 0.8)',
-            borderRadius: '50%',
-            transform: 'translate(-50%, -50%)',
-            pointerEvents: 'none',
-            zIndex: 9999,
-            opacity: cursorOpacity,
-            transition: `opacity ${CURSOR_FADE_DURATION_MS}ms ease-in-out`,
-          }}
-        />
+      {showWelcomePage && <WelcomePage onGraphLoad={loadGraphFromUrl} />}
+      
+      {!showWelcomePage && graph && ( // Ensure graph data exists before rendering
+        <div 
+          className={`fixed inset-0 transition-opacity duration-1000 ease-in-out ${isGraphContainerVisible ? 'opacity-100' : 'opacity-0'}`}
+        >
+          <Graph3D ref={fgRef} data={graph} hoverId={hoverId} />
+          <HandTracker
+            onHoverPinchMove={handleHoverPinchMove}
+            onTwoHandPinchGesture={handleTwoHandPinchGesture}
+          />
+          {isCursorVisible && (
+            <div
+              className="fixed w-6 h-6 pointer-events-none z-[10000] bg-blue-500/40 border-2 border-blue-500/80 rounded-full transform -translate-x-1/2 -translate-y-1/2 transition-opacity"
+              style={{
+                left: `${(1 - cursorPosition.x) * 100}%`, // Ensure x is screen coordinate (0-1)
+                top: `${cursorPosition.y * 100}%`,    // Ensure y is screen coordinate (0-1)
+                opacity: cursorOpacity,
+              }}
+            />
+          )}
+        </div>
       )}
-      {/* --- END OF DOM CURSOR ELEMENT --- */}
     </>
   );
 }

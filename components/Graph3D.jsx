@@ -147,7 +147,9 @@ function Graph3DInner({ data, hoverId }, ref) {
         enablePanInteraction={false}
         enableRotateInteraction={false}
         enableNodeDrag={false}
-        backgroundColor="#F5F5F5"
+        backgroundColor="#FFFFFF"
+        linkColor={() => "#E5E5E5"}
+        linkWidth={0.5}
       />
     </div>
   );

@@ -50,6 +50,8 @@ export default function HandTracker({
       { isPinched: false, x: 0, y: 0, pinchPointCoords: null, detectedThisFrame: false, landmarks: null }
     ];
 
+    const twoHandsDetectedThisFrame = results.multiHandLandmarks && results.multiHandLandmarks.length === 2;
+
     if (results.multiHandLandmarks && drawingUtilsRef.current) {
       for (let i = 0; i < results.multiHandLandmarks.length && i < 2; i++) {
         const landmarks = results.multiHandLandmarks[i];
@@ -75,15 +77,15 @@ export default function HandTracker({
         if (handData.detectedThisFrame && handData.landmarks) {
           drawingUtilsRef.current.drawConnectors(canvasCtx, handData.landmarks, drawingUtilsRef.current.HAND_CONNECTIONS, { color: '#00FF00', lineWidth: 2 });
           
-          drawingUtilsRef.current.drawLandmarks(canvasCtx, handData.landmarks, { color: '#FF0000', lineWidth: 1, radius: 2 });
+          drawingUtilsRef.current.drawLandmarks(canvasCtx, handData.landmarks, { color: '#FF0000', lineWidth: 1, radius: (idx) => (idx === 4 || idx === 8) && handData.isPinched ? 6 : 2 });
 
           if (handData.isPinched) {
             const pinchColor = '#FFFF00';
             if (handData.landmarks[4]) {
-              drawingUtilsRef.current.drawLandmarks(canvasCtx, [handData.landmarks[4]], { color: pinchColor, radius: 4 });
+              drawingUtilsRef.current.drawLandmarks(canvasCtx, [handData.landmarks[4]], { color: pinchColor, radius: 6 });
             }
             if (handData.landmarks[8]) {
-              drawingUtilsRef.current.drawLandmarks(canvasCtx, [handData.landmarks[8]], { color: pinchColor, radius: 4 });
+              drawingUtilsRef.current.drawLandmarks(canvasCtx, [handData.landmarks[8]], { color: pinchColor, radius: 6 });
             }
           }
         }
@@ -91,25 +93,19 @@ export default function HandTracker({
     }
 
     const primaryHand = currentFrameHandData[0];
-    const twoHandsDetected = currentFrameHandData[0].detectedThisFrame && 
-                            currentFrameHandData[1].detectedThisFrame;
 
-    if (primaryHand.detectedThisFrame && primaryHand.isPinched && 
-        primaryHand.pinchPointCoords && onHoverPinchMove && !twoHandsDetected) {
-      onHoverPinchMove({ 
-        x: primaryHand.pinchPointCoords.x, 
-        y: primaryHand.pinchPointCoords.y,
-        twoHandsDetected: false
-      });
-    }
-
-    // When two hands are detected, explicitly hide the cursor
-    if (twoHandsDetected && onHoverPinchMove) {
-      onHoverPinchMove({ 
-        x: 0, 
-        y: 0, 
-        twoHandsDetected: true 
-      });
+    if (onHoverPinchMove) {
+      if (primaryHand.detectedThisFrame && primaryHand.isPinched && primaryHand.pinchPointCoords && !twoHandsDetectedThisFrame) {
+        onHoverPinchMove({ 
+          x: primaryHand.pinchPointCoords.x, 
+          y: primaryHand.pinchPointCoords.y,
+          twoHandsDetected: false
+        });
+      } else if (twoHandsDetectedThisFrame) {
+        onHoverPinchMove({ x: 0, y: 0, twoHandsDetected: true });
+      } else if (!primaryHand.isPinched && onHoverPinchMove) {
+        onHoverPinchMove({ x:0, y:0, twoHandsDetected: false, notPinched: true });
+      }
     }
 
     const hand0Data = currentFrameHandData[0];
@@ -118,32 +114,26 @@ export default function HandTracker({
     const hand0Pinched = hand0Data.detectedThisFrame && hand0Data.isPinched && hand0Data.pinchPointCoords;
     const hand1Pinched = hand1Data.detectedThisFrame && hand1Data.isPinched && hand1Data.pinchPointCoords;
 
-    if (hand0Pinched && hand1Pinched) {
+    if (hand0Pinched && hand1Pinched && onTwoHandPinchGesture) {
       const gesturePayload = {
         hand0: { x: hand0Data.pinchPointCoords.x, y: hand0Data.pinchPointCoords.y },
         hand1: { x: hand1Data.pinchPointCoords.x, y: hand1Data.pinchPointCoords.y }
       };
       if (!twoHandGestureIsActive.current) {
         twoHandGestureIsActive.current = true;
-        if (onTwoHandPinchGesture) {
-          onTwoHandPinchGesture({ ...gesturePayload, phase: 'start' });
-        }
+        onTwoHandPinchGesture({ ...gesturePayload, phase: 'start' });
       } else {
-        if (onTwoHandPinchGesture) {
-          onTwoHandPinchGesture({ ...gesturePayload, phase: 'move' });
-        }
+        onTwoHandPinchGesture({ ...gesturePayload, phase: 'move' });
       }
     } else {
-      if (twoHandGestureIsActive.current) {
+      if (twoHandGestureIsActive.current && onTwoHandPinchGesture) {
         twoHandGestureIsActive.current = false;
         const endPayload = {
           hand0: { x: handPinchStates.current[0].x, y: handPinchStates.current[0].y },
           hand1: { x: handPinchStates.current[1].x, y: handPinchStates.current[1].y },
           phase: 'end'
         };
-        if (onTwoHandPinchGesture) {
-          onTwoHandPinchGesture(endPayload);
-        }
+        onTwoHandPinchGesture(endPayload);
       }
     }
     
@@ -233,13 +223,14 @@ export default function HandTracker({
   return (
     <div style={{
       position: 'fixed',
-      top: '10px',
-      right: '10px',
+      bottom: '20px',
+      right: '20px',
       width: '320px',
       height: '240px',
-      zIndex: 1000,
-      border: '1px solid lightgrey',
-      overflow: 'hidden'
+      zIndex: 10000,
+      borderRadius: '8px',
+      overflow: 'hidden',
+      backdropFilter: 'blur(3px)',
     }}>
       <video
         ref={videoRef}
