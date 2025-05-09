@@ -1,6 +1,6 @@
 "use client";
 import dynamic from "next/dynamic";
-import { forwardRef, useImperativeHandle, useEffect, useRef, useCallback, useState } from "react";
+import { forwardRef, useImperativeHandle, useEffect, useRef, useCallback, useState, useMemo } from "react";
 import * as THREE from "three";
 import SpriteText from "three-spritetext";
 import { fontSizeFromWeight } from "@/lib/wiki";
@@ -15,6 +15,7 @@ const dummyData = {
 };
 
 function Graph3DInner({ data, hoverId }, ref) {
+  console.log('[Graph3DInner] Rendering. hoverId:', hoverId);
   const fg = useRef();
 
   useImperativeHandle(ref, () => ({
@@ -25,99 +26,37 @@ function Graph3DInner({ data, hoverId }, ref) {
     controls: () => fg.current?.controls?.()
   }));
 
-  const camRef = useRef();
-  const rafRef = useRef();
   const [graph, setGraph] = useState(data || dummyData);
   const fetchedUrlsRef = useRef(new Set());
   const lastClickRef = useRef(0);
 
-  // Get sprite from node - wrapping to avoid issues if internal naming changes
   const getSprite = (node) => node.__threeObj;
-
-  // Update label visibility based on camera distance
-  const updateLabels = useCallback(() => {
-    if (!camRef.current) return;
-    
-    // Cancel any existing RAF to prevent multiple updates in same frame
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    
-    // Schedule update on next animation frame
-    rafRef.current = requestAnimationFrame(() => {
-      // Calculate distance from camera to center (origin)
-      const distance = camRef.current.position.length();
-      
-      // Add small hysteresis buffer to prevent flickering
-      const near = 400 - 20;
-      const far = 800 + 20;
-      
-      if (!fg.current || !graph || !graph.nodes) return;
-      
-      graph.nodes.forEach(node => {
-        const sprite = getSprite(node);
-        if (!sprite) return;
-        
-        const weight = typeof node.weight === "number" ? node.weight : 0.3;
-        
-        // Apply different LOD levels based on distance
-        if (distance < near) {
-          // Close view: full size labels
-          sprite.visible = true;
-          sprite.textHeight = fontSizeFromWeight(weight);
-        } else if (distance < far) {
-          // Medium view: smaller labels
-          sprite.visible = true;
-          sprite.textHeight = fontSizeFromWeight(weight) * 0.6;
-        } else {
-          // Far view: hide labels for non-central nodes
-          sprite.visible = node.isCentral === true;
-          if (sprite.visible) {
-            sprite.textHeight = fontSizeFromWeight(weight) * 0.4;
-          }
-        }
-      });
-      
-      // Refresh graph to apply changes
-      fg.current.refresh();
-    });
-  }, [graph]);
 
   const handleEngineStop = useCallback(() => {
     if (!fg.current) return;
-    // Get camera reference once graph is ready
-    camRef.current = fg.current.camera();
-    
-    // Get controls and add change listener for camera movement
-    const controls = fg.current.controls();
-    if (controls) {
-      controls.addEventListener('change', updateLabels);
-      // Run initial labels update
-      updateLabels();
-    }
-  }, [updateLabels]);
+    console.log("Graph engine has stopped or initialized.");
+  }, []);
 
   useEffect(() => {
     if (!fg.current) return;
 
-    // push nodes apart & lengthen links
     fg.current.d3Force("charge").strength(-80);
     fg.current.d3Force("link").distance(60);
     fg.current.zoomToFit(400);
     
-    // Cleanup function
     return () => {
-      // Remove event listener when component unmounts
-      if (fg.current) {
-        const controls = fg.current.controls();
-        if (controls) {
-          controls.removeEventListener('change', updateLabels);
-        }
-      }
-      // Cancel any pending animation frame
-      if (rafRef.current) {
-        cancelAnimationFrame(rafRef.current);
-      }
+      // Cleanup related to updateLabels REMOVED
+      // if (fg.current) {
+      //   const controls = fg.current.controls();
+      //   if (controls) {
+      //     controls.removeEventListener('change', updateLabels);
+      //   }
+      // }
+      // if (rafRef.current) {
+      //   cancelAnimationFrame(rafRef.current);
+      // }
     };
-  }, [graph, updateLabels]);
+  }, [graph]);
 
   useEffect(() => {
     setGraph(data || dummyData);
@@ -147,13 +86,42 @@ function Graph3DInner({ data, hoverId }, ref) {
 
   const handleNodeClick = (node) => {
     const now = Date.now();
-    if (now - lastClickRef.current < 300) { // double-click (<300 ms)
-      if (!node.type) { // Wikipedia nodes only
+    if (now - lastClickRef.current < 300) { 
+      if (!node.type) { 
         expandNode(node);
       }
     }
     lastClickRef.current = now;
   };
+
+  const handleNodeThreeObject = useCallback((node) => {
+    const labelText = node.id;
+    const label = new SpriteText(labelText);
+    label.userData = { node }; 
+    label.material.depthWrite = false; 
+    label.color = "white"; 
+    label.textHeight = fontSizeFromWeight(
+      typeof node.weight === "number" ? node.weight : 0.3
+    );
+    return label;
+  }, []);
+
+  const memoizedNodeThreeObjectExtend = useMemo(() => {
+    return (threeObj, node, globalScale) => {
+      if (!threeObj || !threeObj.hasOwnProperty('color')) {
+        return false; 
+      }
+      const targetColor = (node.id === hoverId) ? "lime" : "white";
+      if (threeObj.color !== targetColor) {
+        threeObj.color = targetColor;
+      }
+      // Optional: If hover should also affect size, you could modify threeObj.textHeight here.
+      // This is NOT done by default now that updateLabels is removed.
+      // const defaultHeight = fontSizeFromWeight(typeof node.weight === "number" ? node.weight : 0.3);
+      // threeObj.textHeight = (node.id === hoverId) ? defaultHeight * 1.2 : defaultHeight;
+      return false; 
+    };
+  }, [hoverId]);
 
   return (
     <div className="w-screen h-screen">
@@ -161,26 +129,10 @@ function Graph3DInner({ data, hoverId }, ref) {
         ref={fg}
         graphData={graph || dummyData}
         nodeVal="val"
-        nodeThreeObjectExtend={false}
         onEngineStop={handleEngineStop}
         onNodeClick={handleNodeClick}
-        nodeThreeObject={(node) => {
-          const labelText = node.id;
-          const label = new SpriteText(labelText);
-          label.userData = { node };
-          label.material.depthWrite = false;
-
-          if (node.id === hoverId) {
-            label.color = "lime";
-          } else {
-            label.color = "white";
-          }
-
-          label.textHeight = fontSizeFromWeight(
-            typeof node.weight === "number" ? node.weight : 0.3
-          );
-          return label;
-        }}
+        nodeThreeObject={handleNodeThreeObject}
+        nodeThreeObjectExtend={memoizedNodeThreeObjectExtend}
       />
     </div>
   );

@@ -55,99 +55,98 @@ export default function Home() {
 
     const camera = fgRef.current.camera();
     if (!camera) {
-        console.warn("Camera not available from fgRef");
+        console.warn("Camera not available from fgRef for pinch");
         return;
     }
     const scene = fgRef.current.scene();
     if (!scene) {
-        console.warn("Scene not available from fgRef");
+        console.warn("Scene not available from fgRef for pinch");
         return;
     }
 
     const raycaster = new THREE.Raycaster();
-    const ndc = { x: ((1 - x) - 0.5) * 2, y: -(y - 0.5) * 2 };
+    // NDC calculation: current is { x: 1 - 2 * x, y: 1 - 2 * y }
+    // If HandTracker x,y are 0-1 (top-left origin), canonical is: { x: x * 2 - 1, y: 1 - y * 2 }
+    const ndc = { x: 1 - 2 * x, y: 1 - 2 * y };
     raycaster.setFromCamera(ndc, camera);
     const intersects = raycaster.intersectObjects(scene.children, true);
     const hit = intersects.find(i => i.object.userData?.node);
-    if (!hit) return;
-    const node = hit.object.userData.node;
-
-    const nodePosition = node.__threeObj ? node.__threeObj.position : { x: node.x || 0, y: node.y || 0, z: node.z || 0 };
-
-    if (double) {
-      console.log("Double pinch on node:", node);
-      const distance = 150;
-      const offsetDistance = distance / Math.sqrt(3);
-      fgRef.current.cameraPosition(
-        {
-          x: nodePosition.x + offsetDistance,
-          y: nodePosition.y + offsetDistance,
-          z: nodePosition.z + offsetDistance,
-        }, 
-        nodePosition, 
-        1000 
-      );
+    
+    let targetPosition;
+    if (hit) {
+        const node = hit.object.userData.node;
+        targetPosition = node.__threeObj ? node.__threeObj.position.clone() : new THREE.Vector3(node.x || 0, node.y || 0, node.z || 0);
+        // console.log("Pinch target node:", node.id);
     } else {
-      const distance = 60;
-      const offsetDistance = distance / Math.sqrt(3);
-      fgRef.current.cameraPosition(
-        {
-          x: nodePosition.x + offsetDistance, 
-          y: nodePosition.y + offsetDistance,
-          z: nodePosition.z + offsetDistance
-        },
-        nodePosition, 
-        400 
-      );
+        // Fallback: if no node is hit, zoom towards a point in front of the camera.
+        const gazeDirection = new THREE.Vector3();
+        camera.getWorldDirection(gazeDirection);
+        targetPosition = new THREE.Vector3().addVectors(camera.position, gazeDirection.multiplyScalar(200)); // Target 200 units ahead
+        // console.warn("Pinch gesture did not hit a node; targeting point in space.");
     }
+
+    const duration = double ? 1000 : 400;
+    const distanceFactor = double ? 150 : 60; // Determines how far the camera is offset
+
+    // Calculate camera offset based on a direction (e.g., diagonally up-right-back from target)
+    // This is a simple offset; you might want a more sophisticated one based on current camera orientation.
+    const offsetDirection = new THREE.Vector3(1, 1, 1).normalize();
+    const cameraTargetPosition = new THREE.Vector3().addVectors(targetPosition, offsetDirection.multiplyScalar(distanceFactor));
+
+    fgRef.current.cameraPosition(
+      cameraTargetPosition, 
+      targetPosition, 
+      duration 
+    );
   }, [graph]);
 
   const handleHoverPinchMove = useCallback(({ x, y }) => {
-    let newHoverId = null;
+    let calculatedNewHoverId = null;
     if (fgRef.current) {
       const camera = fgRef.current.camera();
       const scene = fgRef.current.scene();
 
       if (camera && scene) {
         const raycaster = new THREE.Raycaster();
-        const ndc = { x: ((1 - x) - 0.5) * 2, y: -(y - 0.5) * 2 };
+        // NDC calculation: current is { x: 1 - 2 * x, y: 1 - 2 * y }
+        // If HandTracker x,y are 0-1 (top-left origin), canonical is: { x: x * 2 - 1, y: 1 - y * 2 }
+        const ndc = { x: 1 - 2 * x, y: 1 - 2 * y };
         raycaster.setFromCamera(ndc, camera);
         const intersects = raycaster.intersectObjects(scene.children, true);
         const hit = intersects.find(i => i.object.userData?.node);
-        newHoverId = hit ? hit.object.userData.node.id : null;
-      } else {
-        setCursorOpacity(0);
-        if (cursorRemoveTimerRef.current) clearTimeout(cursorRemoveTimerRef.current);
-        cursorRemoveTimerRef.current = setTimeout(() => setIsCursorVisible(false), CURSOR_FADE_DURATION_MS);
+        calculatedNewHoverId = hit ? hit.object.userData.node.id : null;
       }
     }
-    if (hoverId !== newHoverId) {
-      setHoverId(newHoverId);
-    }
 
+    setHoverId(prevHoverId => {
+      if (prevHoverId !== calculatedNewHoverId) {
+        console.log('[PARENT] hoverId changing. Old:', prevHoverId, 'New:', calculatedNewHoverId);
+        return calculatedNewHoverId;
+      }
+      return prevHoverId;
+    });
+
+    // --- Cursor visibility logic ---
     setCursorPosition({ x, y });
     setIsCursorVisible(true);
-
     requestAnimationFrame(() => {
       setCursorOpacity(1);
     });
-
     if (cursorFadeOutTimerRef.current) clearTimeout(cursorFadeOutTimerRef.current);
     if (cursorRemoveTimerRef.current) clearTimeout(cursorRemoveTimerRef.current);
-
     cursorFadeOutTimerRef.current = setTimeout(() => {
       setCursorOpacity(0);
-
       cursorRemoveTimerRef.current = setTimeout(() => {
         setIsCursorVisible(false);
       }, CURSOR_FADE_DURATION_MS);
     }, HIDE_CURSOR_AFTER_MS);
+    // --- End cursor visibility logic ---
 
-  }, [hoverId]);
+  }, []); // Empty dependency array: fgRef is stable, setters are stable.
 
   useEffect(() => {
     if (hoverId !== null) {
-      // console.log(`app/page.js: Now hovering over node ID: ${hoverId}`);
+      // console.log(`app/page.js: Actual hoverId state is now: ${hoverId}`);
     }
   }, [hoverId]);
 
@@ -172,7 +171,7 @@ export default function Home() {
         <div
           style={{
             position: 'fixed',
-            left: `${cursorPosition.x * 100}%`,
+            left: `${(1 - cursorPosition.x) * 100}%`,
             top: `${cursorPosition.y * 100}%`,
             width: '24px',
             height: '24px',

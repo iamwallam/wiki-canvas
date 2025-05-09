@@ -29,6 +29,10 @@ export default function HandTracker({ onPinch, onPinchMove }) {
 
     const canvasCtx = canvasRef.current.getContext('2d');
     canvasCtx.save();
+
+    canvasCtx.translate(canvasRef.current.width, 0);
+    canvasCtx.scale(-1, 1);
+
     canvasCtx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
     const now = Date.now();
 
@@ -156,7 +160,7 @@ export default function HandTracker({ onPinch, onPinchMove }) {
             onPinchMove({ x: hoverTriggerPoint.x, y: hoverTriggerPoint.y });
         }
     }
-    canvasCtx.restore(); // Called once after all drawing and logic
+    canvasCtx.restore();
   };
 
   useEffect(() => {
