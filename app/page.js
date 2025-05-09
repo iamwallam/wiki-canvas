@@ -51,54 +51,67 @@ export default function Home() {
   };
 
   const handlePinch = useCallback(({ x, y, double }) => {
-    if (!fgRef.current || !graph) return;
+    // Log that the fist gesture was detected
+    console.log(`Fist gesture detected (double: ${double}) at x: ${x}, y: ${y}. Actions currently disabled.`);
 
+    // Initial guard clauses remain, in case fgRef or graph is needed for other potential future logic here.
+    if (!fgRef.current || !graph) {
+      // console.warn("Graph ref or data not available for fist action (actions disabled).");
+      return;
+    }
     const camera = fgRef.current.camera();
-    if (!camera) {
-        console.warn("Camera not available from fgRef for pinch");
-        return;
-    }
     const scene = fgRef.current.scene();
-    if (!scene) {
-        console.warn("Scene not available from fgRef for pinch");
-        return;
+    if (!camera || !scene) {
+      // console.warn("Camera or Scene not available for fist action (actions disabled).");
+      return;
     }
 
+    // --- ALL FIST ACTION LOGIC COMMENTED OUT ---
+    /*
     const raycaster = new THREE.Raycaster();
-    // NDC calculation: current is { x: 1 - 2 * x, y: 1 - 2 * y }
-    // If HandTracker x,y are 0-1 (top-left origin), canonical is: { x: x * 2 - 1, y: 1 - y * 2 }
     const ndc = { x: 1 - 2 * x, y: 1 - 2 * y };
     raycaster.setFromCamera(ndc, camera);
     const intersects = raycaster.intersectObjects(scene.children, true);
     const hit = intersects.find(i => i.object.userData?.node);
-    
-    let targetPosition;
+
     if (hit) {
-        const node = hit.object.userData.node;
-        targetPosition = node.__threeObj ? node.__threeObj.position.clone() : new THREE.Vector3(node.x || 0, node.y || 0, node.z || 0);
-        // console.log("Pinch target node:", node.id);
-    } else {
-        // Fallback: if no node is hit, zoom towards a point in front of the camera.
-        const gazeDirection = new THREE.Vector3();
-        camera.getWorldDirection(gazeDirection);
-        targetPosition = new THREE.Vector3().addVectors(camera.position, gazeDirection.multiplyScalar(200)); // Target 200 units ahead
-        // console.warn("Pinch gesture did not hit a node; targeting point in space.");
+      const node = hit.object.userData.node;
+      if (double) {
+        // Phase 3: Expand Node
+        console.log("Double fist on node:", node.id, "(Expand action pending - logic disabled)");
+      } else {
+        // Phase 2: SINGLE FIST ACTION - ZOOM TO NODE
+        console.log("Single fist on node:", node.id, "-> Attempting zoomToNode (logic disabled)");
+        // if (fgRef.current && typeof fgRef.current.zoomToNode === 'function') {
+        //   fgRef.current.zoomToNode(node, 750); 
+        // } else {
+        //   console.warn("zoomToNode function not available on fgRef.current.");
+        // }
+      }
+    } else { 
+      // NO NODE HIT - Fallback camera movement
+      console.log(`Fist action (double: ${double}): No node hit. Fallback camera movement disabled.`);
+      // const gazeDirection = new THREE.Vector3();
+      // camera.getWorldDirection(gazeDirection);
+      // const targetPosition = new THREE.Vector3().addVectors(camera.position, gazeDirection.multiplyScalar(200)); 
+
+      // const duration = double ? 1000 : 400;
+      // const distanceFactor = double ? 150 : 60;
+      
+      // const offsetDirection = new THREE.Vector3(1, 1, 1).normalize();
+      // const cameraTargetPosition = new THREE.Vector3().addVectors(targetPosition, offsetDirection.multiplyScalar(distanceFactor));
+      
+      // if (fgRef.current && typeof fgRef.current.cameraPosition === 'function') {
+      //   fgRef.current.cameraPosition(cameraTargetPosition, targetPosition, duration);
+      // } else {
+      //    console.warn("cameraPosition function not available on fgRef.current for fallback fist action.");
+      // }
     }
+    */
+    // --- END OF COMMENTED OUT FIST ACTION LOGIC ---
 
-    const duration = double ? 1000 : 400;
-    const distanceFactor = double ? 150 : 60; // Determines how far the camera is offset
-
-    // Calculate camera offset based on a direction (e.g., diagonally up-right-back from target)
-    // This is a simple offset; you might want a more sophisticated one based on current camera orientation.
-    const offsetDirection = new THREE.Vector3(1, 1, 1).normalize();
-    const cameraTargetPosition = new THREE.Vector3().addVectors(targetPosition, offsetDirection.multiplyScalar(distanceFactor));
-
-    fgRef.current.cameraPosition(
-      cameraTargetPosition, 
-      targetPosition, 
-      duration 
-    );
-  }, [graph]);
+  }, [graph]); // Keep `graph` dependency for the initial guard, though not strictly necessary if all logic is out.
+               // Could be an empty array [] if the guards are also removed or made unconditional.
 
   const handleHoverPinchMove = useCallback(({ x, y }) => {
     let calculatedNewHoverId = null;
@@ -108,8 +121,6 @@ export default function Home() {
 
       if (camera && scene) {
         const raycaster = new THREE.Raycaster();
-        // NDC calculation: current is { x: 1 - 2 * x, y: 1 - 2 * y }
-        // If HandTracker x,y are 0-1 (top-left origin), canonical is: { x: x * 2 - 1, y: 1 - y * 2 }
         const ndc = { x: 1 - 2 * x, y: 1 - 2 * y };
         raycaster.setFromCamera(ndc, camera);
         const intersects = raycaster.intersectObjects(scene.children, true);
@@ -142,7 +153,7 @@ export default function Home() {
     }, HIDE_CURSOR_AFTER_MS);
     // --- End cursor visibility logic ---
 
-  }, []); // Empty dependency array: fgRef is stable, setters are stable.
+  }, []);
 
   useEffect(() => {
     if (hoverId !== null) {
