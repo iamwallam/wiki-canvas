@@ -1,85 +1,76 @@
 "use client";
 import dynamic from "next/dynamic";
-import { useEffect, useRef, useCallback, useState } from "react";
+import { forwardRef, useImperativeHandle, useEffect, useRef, useCallback, useState, useMemo } from "react";
+import * as THREE from "three";
 import SpriteText from "three-spritetext";
 import { fontSizeFromWeight } from "@/lib/wiki";
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 const ForceGraph3D = dynamic(() => import("react-force-graph-3d"), {
   ssr: false,
 });
 
 const dummyData = {
-  nodes: [],
-  links: []
+  nodes: [...Array(5)].map((_, i) => ({ id: `n${i}`, url: `https://example.com/node/n${i}` })),
+  links: [...Array(4)].map((_, i) => ({ source: "n0", target: `n${i + 1}` })),
 };
 
-export default function Graph3D({ data }) {
+function Graph3DInner({ data, hoverId }, ref) {
+  console.log('[Graph3DInner] Rendering. hoverId:', hoverId);
   const fg = useRef();
-  const camRef = useRef();
-  const rafRef = useRef();
-  const [graph, setGraph] = useState(dummyData);
+  const customOrbitControlsRef = useRef();
+  const mountRef = useRef(null);
+
+  useImperativeHandle(ref, () => ({
+    camera: () => fg.current?.camera?.(),
+    cameraPosition: (...a) => fg.current?.cameraPosition?.(...a),
+    zoomToNode: (nodeObj, ms) => fg.current?.zoomToNode?.(nodeObj, ms),
+    scene: () => fg.current?.scene?.(),
+    controls: () => customOrbitControlsRef.current,
+  }));
+
+  const [graph, setGraph] = useState(data || dummyData);
   const fetchedUrlsRef = useRef(new Set());
   const lastClickRef = useRef(0);
 
   const getSprite = (node) => node.__threeObj;
 
-  const updateLabels = useCallback(() => {
-    if (!camRef.current) return;
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
-
-    rafRef.current = requestAnimationFrame(() => {
-      const distance = camRef.current.position.length();
-      const near = 380;
-      const far = 820;
-      if (!fg.current || !graph?.nodes) return;
-
-      graph.nodes.forEach(node => {
-        const sprite = getSprite(node);
-        if (!sprite) return;
-        const weight = typeof node.weight === "number" ? node.weight : 0.3;
-
-        if (distance < near) {
-          sprite.visible = true;
-          sprite.textHeight = fontSizeFromWeight(weight);
-        } else if (distance < far) {
-          sprite.visible = true;
-          sprite.textHeight = fontSizeFromWeight(weight) * 0.6;
-        } else {
-          sprite.visible = node.isCentral === true;
-          if (sprite.visible) {
-            sprite.textHeight = fontSizeFromWeight(weight) * 0.4;
-          }
-        }
-      });
-
-      fg.current.refresh();
-    });
-  }, [graph]);
-
   const handleEngineStop = useCallback(() => {
     if (!fg.current) return;
-    camRef.current = fg.current.camera();
-    const controls = fg.current.controls();
-    if (controls) {
-      controls.addEventListener('change', updateLabels);
-      updateLabels();
+    console.log("Graph engine has stopped or initialized.");
+
+    if (fg.current.camera && fg.current.renderer && mountRef.current) {
+        const camera = fg.current.camera();
+        const rendererDomElement = fg.current.renderer().domElement;
+
+        if (customOrbitControlsRef.current) {
+            customOrbitControlsRef.current.dispose();
+        }
+        
+        customOrbitControlsRef.current = new OrbitControls(camera, rendererDomElement);
+        customOrbitControlsRef.current.enableDamping = true;
+        customOrbitControlsRef.current.dampingFactor = 0.05;
+        
+        console.log("Custom OrbitControls initialized.");
+    } else {
+        console.warn("Could not initialize custom OrbitControls: camera, renderer, or mount point not ready.");
     }
-  }, [updateLabels]);
+  }, []);
 
   useEffect(() => {
     if (!fg.current) return;
     fg.current.d3Force("charge").strength(-80);
-    fg.current.d3Force("link").distance(link =>
-      typeof link.distance === "number" ? link.distance : 150
-    );
+    fg.current.d3Force("link").distance(60);
     fg.current.zoomToFit(400);
-
+    
     return () => {
-      const controls = fg.current?.controls();
-      if (controls) controls.removeEventListener('change', updateLabels);
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      if (customOrbitControlsRef.current) {
+        customOrbitControlsRef.current.dispose();
+        customOrbitControlsRef.current = null;
+        console.log("Custom OrbitControls disposed.");
+      }
     };
-  }, [graph, updateLabels]);
+  }, [graph]);
 
   useEffect(() => {
     setGraph(data || dummyData);
@@ -95,11 +86,13 @@ export default function Graph3D({ data }) {
   const expandNode = async (node) => {
     if (fetchedUrlsRef.current.has(node.url)) return;
     fetchedUrlsRef.current.add(node.url);
+    
     const res = await fetch('/api/ingest', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url: node.url })
     });
+    
     if (!res.ok) return console.error(await res.text());
     const subGraph = await res.json();
     mergeGraph(subGraph);
@@ -107,32 +100,59 @@ export default function Graph3D({ data }) {
 
   const handleNodeClick = (node) => {
     const now = Date.now();
-    if (now - lastClickRef.current < 300) {
-      if (!node.type) expandNode(node);
+    if (now - lastClickRef.current < 300) { 
+      if (!node.type) { 
+        expandNode(node);
+      }
     }
     lastClickRef.current = now;
   };
 
+  const handleNodeThreeObject = useCallback((node) => {
+    const labelText = node.id;
+    const label = new SpriteText(labelText);
+    label.userData = { node }; 
+    label.material.depthWrite = false; 
+    label.color = "black";
+    label.textHeight = fontSizeFromWeight(
+      typeof node.weight === "number" ? node.weight : 0.3
+    );
+    return label;
+  }, []);
+
+  const memoizedNodeThreeObjectExtend = useMemo(() => {
+    return (threeObj, node, globalScale) => {
+      if (!threeObj || !threeObj.hasOwnProperty('color')) {
+        return false; 
+      }
+      const targetColor = (node.id === hoverId) ? "lime" : "black";
+      if (threeObj.color !== targetColor) {
+        threeObj.color = targetColor;
+      }
+      return false; 
+    };
+  }, [hoverId]);
+
   return (
-    <div className="w-screen h-screen">
+    <div ref={mountRef} className="w-screen h-screen bg-canvas">
       <ForceGraph3D
         ref={fg}
-        graphData={graph}
+        graphData={graph || dummyData}
         nodeVal="val"
-        nodeThreeObjectExtend={false}
         onEngineStop={handleEngineStop}
         onNodeClick={handleNodeClick}
-        nodeThreeObject={(node) => {
-          const labelText = node.id;
-          const label = new SpriteText(labelText);
-          label.material.depthWrite = false;
-          label.color = "white";
-          label.textHeight = fontSizeFromWeight(
-            typeof node.weight === "number" ? node.weight : 0.3
-          );
-          return label;
-        }}
+        nodeThreeObject={handleNodeThreeObject}
+        nodeThreeObjectExtend={memoizedNodeThreeObjectExtend}
+        enableZoomInteraction={false}
+        enablePanInteraction={false}
+        enableRotateInteraction={false}
+        enableNodeDrag={false}
+        backgroundColor="#FFFFFF"
+        linkColor={() => "#E5E5E5"}
+        linkWidth={0.5}
       />
     </div>
   );
 }
+
+export default forwardRef(Graph3DInner);
