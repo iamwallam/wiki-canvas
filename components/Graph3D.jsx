@@ -14,7 +14,7 @@ const dummyData = {
   links: [...Array(4)].map((_, i) => ({ source: "n0", target: `n${i + 1}` })),
 };
 
-function Graph3DInner({ data }, ref) {
+function Graph3DInner({ data, hoverId }, ref) {
   const fg = useRef();
 
   useImperativeHandle(ref, () => ({
@@ -169,7 +169,13 @@ function Graph3DInner({ data }, ref) {
           const label = new SpriteText(labelText);
           label.userData = { node };
           label.material.depthWrite = false;
-          label.color = "white";
+
+          if (node.id === hoverId) {
+            label.color = "lime";
+          } else {
+            label.color = "white";
+          }
+
           label.textHeight = fontSizeFromWeight(
             typeof node.weight === "number" ? node.weight : 0.3
           );
