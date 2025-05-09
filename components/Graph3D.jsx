@@ -113,7 +113,7 @@ function Graph3DInner({ data, hoverId }, ref) {
     const label = new SpriteText(labelText);
     label.userData = { node }; 
     label.material.depthWrite = false; 
-    label.color = "white"; 
+    label.color = "black";
     label.textHeight = fontSizeFromWeight(
       typeof node.weight === "number" ? node.weight : 0.3
     );
@@ -125,7 +125,7 @@ function Graph3DInner({ data, hoverId }, ref) {
       if (!threeObj || !threeObj.hasOwnProperty('color')) {
         return false; 
       }
-      const targetColor = (node.id === hoverId) ? "lime" : "white";
+      const targetColor = (node.id === hoverId) ? "lime" : "black";
       if (threeObj.color !== targetColor) {
         threeObj.color = targetColor;
       }
@@ -134,7 +134,7 @@ function Graph3DInner({ data, hoverId }, ref) {
   }, [hoverId]);
 
   return (
-    <div ref={mountRef} className="w-screen h-screen">
+    <div ref={mountRef} className="w-screen h-screen bg-canvas">
       <ForceGraph3D
         ref={fg}
         graphData={graph || dummyData}
@@ -147,6 +147,7 @@ function Graph3DInner({ data, hoverId }, ref) {
         enablePanInteraction={false}
         enableRotateInteraction={false}
         enableNodeDrag={false}
+        backgroundColor="#F5F5F5"
       />
     </div>
   );
