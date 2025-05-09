@@ -8,16 +8,19 @@ export default function HandTracker({ onPinch, onPinchMove }) {
   const cameraRef = useRef(null);
   const drawingUtilsRef = useRef(null);
 
-  // --- MODIFIED/NEW REFS and constants for pinch action logic ---
-  const isPhysicallyPinched = useRef(false);    // Tracks raw physical state of pinch
-  const pinchActionTriggerTimer = useRef(null); // Timer to delay firing onPinch
-  const lastOnPinchFireTime = useRef(0);        // Timestamp of when the last onPinch ACTION was fired
-  const pinchActionCooldownTimer = useRef(null);// Timer for cooldown after an onPinch action
+  // --- REFS for action gesture (now FIST) logic ---
+  const isPerformingActionGesture = useRef(false); // MODIFIED: Was isPhysicallyPinched
+  const actionGestureTriggerTimer = useRef(null);  // MODIFIED: Was pinchActionTriggerTimer
+  const lastActionGestureFireTime = useRef(0);     // MODIFIED: Was lastOnPinchFireTime
+  const actionGestureCooldownTimer = useRef(null); // MODIFIED: Was pinchActionCooldownTimer
 
-  const MIN_PINCH_HOLD_DURATION = 150; // ms - Pinch must be held this long to be considered an "action"
-  const PINCH_ACTION_COOLDOWN = 500;   // ms - Minimum time between two separate onPinch "action" events
-  const DOUBLE_PINCH_WINDOW = 550;     // ms - Max time between two onPinch actions to be a double pinch
-  // --- End of MODIFIED/NEW REFS and constants ---
+  // --- CONSTANTS for gesture timing and thresholds ---
+  const MIN_ACTION_GESTURE_HOLD_DURATION = 150; // MODIFIED: Adjusted for fist
+  const ACTION_GESTURE_COOLDOWN = 300;       // MODIFIED: Adjusted for fist
+  const DOUBLE_ACTION_GESTURE_WINDOW = 500;  // MODIFIED: Adjusted for fist
+
+  const FIST_FINGERTIP_TO_WRIST_THRESH = 0.15; // NEW: Threshold for fist detection
+  const HOVER_PINCH_THRESH = 0.06; // RENAMED: Was PINCH_THRESH, now specific to hover
 
   const onResults = (res) => {
     if (!canvasRef.current || !drawingUtilsRef.current) {
@@ -27,129 +30,133 @@ export default function HandTracker({ onPinch, onPinchMove }) {
     const canvasCtx = canvasRef.current.getContext('2d');
     canvasCtx.save();
     canvasCtx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-    const now = Date.now(); // Get current time
+    const now = Date.now();
 
-    // Initialize variables for pinch state and landmark coordinates
-    let currentlyPinched = false;
-    let firstHandTipIForLogic = null; // To store index tip coords for pinch/move logic
+    let isFistDetected = false;
+    let isHoverPinchDetected = false;
+    let actionTriggerPoint = null; // To store x,y for the action gesture (e.g., wrist)
+    let hoverTriggerPoint = null;  // To store x,y for the hover gesture (e.g., index tip)
 
     if (res.multiHandLandmarks && res.multiHandLandmarks.length > 0) {
-        // Calculate pinch state based on the first detected hand
-        const firstHandLandmarks = res.multiHandLandmarks[0];
-        const tipI = firstHandLandmarks[8];                         // index-tip
-        const tipT = firstHandLandmarks[4];                         // thumb-tip
-        firstHandTipIForLogic = tipI; // Store for use in onPinch and onPinchMove
+        const landmarks = res.multiHandLandmarks[0]; // Using the first hand for all logic
+        const wrist = landmarks[0];         // WRIST
+        const thumbTip = landmarks[4];      // THUMB_TIP
+        const indexTip = landmarks[8];      // INDEX_FINGER_TIP
+        const middleTip = landmarks[12];    // MIDDLE_FINGER_TIP
+        const ringTip = landmarks[16];      // RING_FINGER_TIP
+        const pinkyTip = landmarks[20];     // PINKY_FINGER_TIP
 
-        const dx = tipI.x - tipT.x;
-        const dy = tipI.y - tipT.y;
-        const dist = Math.hypot(dx, dy);
+        // Define trigger points for gestures
+        actionTriggerPoint = { x: wrist.x, y: wrist.y };       // Fist action centered on wrist
+        hoverTriggerPoint = { x: indexTip.x, y: indexTip.y };  // Hover centered on index tip
 
-        const PINCH_THRESH = 0.04; // Using the adjusted threshold
-        currentlyPinched = dist < PINCH_THRESH;
+        // --- 1. Fist Detection (for Actions) ---
+        const distIndexToWrist = Math.hypot(indexTip.x - wrist.x, indexTip.y - wrist.y, (indexTip.z || 0) - (wrist.z || 0));
+        const distMiddleToWrist = Math.hypot(middleTip.x - wrist.x, middleTip.y - wrist.y, (middleTip.z || 0) - (wrist.z || 0));
+        const distRingToWrist = Math.hypot(ringTip.x - wrist.x, ringTip.y - wrist.y, (ringTip.z || 0) - (wrist.z || 0));
+        const distPinkyToWrist = Math.hypot(pinkyTip.x - wrist.x, pinkyTip.y - wrist.y, (pinkyTip.z || 0) - (wrist.z || 0));
 
-        // --- MODIFIED DRAWING LOGIC STARTS ---
-        // Iterate through all detected hands for drawing purposes
-        for (const landmarks of res.multiHandLandmarks) {
-            // 1. Draw connections
-            drawingUtilsRef.current.drawConnectors(canvasCtx, landmarks, drawingUtilsRef.current.HAND_CONNECTIONS, {
-                color: '#00FF00', // Green lines
-                lineWidth: 5,
-            });
+        if (
+            distIndexToWrist < FIST_FINGERTIP_TO_WRIST_THRESH &&
+            distMiddleToWrist < FIST_FINGERTIP_TO_WRIST_THRESH &&
+            distRingToWrist < FIST_FINGERTIP_TO_WRIST_THRESH &&
+            distPinkyToWrist < FIST_FINGERTIP_TO_WRIST_THRESH
+        ) {
+            isFistDetected = true;
+        }
 
-            // 2. Isolate landmark points for specific coloring
-            const thumbTipLandmark = landmarks[4];    // THUMB_TIP
-            const indexTipLandmark = landmarks[8];    // INDEX_FINGER_TIP
-            // Filter out thumb and index tips to draw them separately
-            const otherLandmarks = landmarks.filter((lm, index) => index !== 4 && index !== 8);
+        // --- 2. Thumb-Index Pinch Detection (for Hover) ---
+        const dxHover = indexTip.x - thumbTip.x;
+        const dyHover = indexTip.y - thumbTip.y;
+        const distHover = Math.hypot(dxHover, dyHover); // No Z for 2D screen pinch hover
+        if (distHover < HOVER_PINCH_THRESH) {
+            isHoverPinchDetected = true;
+        }
 
-            // 3. Draw "other" landmarks with default color
-            drawingUtilsRef.current.drawLandmarks(canvasCtx, otherLandmarks, {
-                color: '#FF0000', // Default Red
-                radius: 3,
-            });
+        // --- 3. Drawing Logic ---
+        // a. Connections
+        drawingUtilsRef.current.drawConnectors(canvasCtx, landmarks, drawingUtilsRef.current.HAND_CONNECTIONS, { color: '#00FF00', lineWidth: 5 });
 
-            // 4. Determine color and radius for thumb and index fingertips
-            let tipColor = '#FF0000'; // Default Red for tips
-            let tipRadius = 3;        // Default radius for tips
+        // b. "Other" landmarks (not wrist or any fingertips)
+        const landmarkIndicesToExclude = [0, 4, 8, 12, 16, 20]; // Wrist and all 5 fingertips
+        const otherNodesToDraw = landmarks.filter((lm, index) => !landmarkIndicesToExclude.includes(index));
+        drawingUtilsRef.current.drawLandmarks(canvasCtx, otherNodesToDraw, { color: '#FF0000', radius: 3 });
+        
+        // c. Wrist landmark (visual feedback for fist gesture base)
+        drawingUtilsRef.current.drawLandmarks(canvasCtx, [wrist], { color: isFistDetected ? '#B8860B' : '#FF0000', radius: isFistDetected ? 5 : 3}); // DarkGoldenRod when fist
 
-            // Use the 'currentlyPinched' state (derived from the first hand) for tip coloring.
-            // This is acceptable as maxNumHands is 1.
-            if (currentlyPinched) {
-                tipRadius = 5; // Make active tips slightly larger for emphasis
+        // d. Fingertips for Fist Gesture (Index, Middle, Ring, Pinky)
+        let fistFingertipsColor = '#FF0000'; // Default Red
+        let fistFingertipsRadius = 3;
+        if (isFistDetected) {
+            fistFingertipsRadius = 5; // Larger when part of a fist
+            if (actionGestureCooldownTimer.current) fistFingertipsColor = '#0077FF'; // Blue: Cooldown
+            else if (actionGestureTriggerTimer.current) fistFingertipsColor = '#FFA500'; // Orange: Arming
+            else fistFingertipsColor = '#FFFF00'; // Yellow: Physically fisted
+        }
+        drawingUtilsRef.current.drawLandmarks(canvasCtx, [indexTip, middleTip, ringTip, pinkyTip], { color: fistFingertipsColor, radius: fistFingertipsRadius });
 
-                if (pinchActionCooldownTimer.current) {
-                    tipColor = '#0077FF'; // Blue: Action Cooldown
-                } else if (pinchActionTriggerTimer.current) {
-                    tipColor = '#FFA500'; // Orange: Action Arming
-                } else {
-                    tipColor = '#FFFF00'; // Yellow: Physically Pinched (but not arming/cooldown)
+        // e. Thumb Tip for Hover Gesture
+        let thumbHoverColor = '#FF0000'; // Default Red
+        let thumbHoverRadius = 3;
+        if (isHoverPinchDetected) {
+            thumbHoverColor = '#90EE90'; // Light Green for active hover pinch
+            thumbHoverRadius = 4;
+        }
+        drawingUtilsRef.current.drawLandmarks(canvasCtx, [thumbTip], { color: thumbHoverColor, radius: thumbHoverRadius });
+
+        // f. Index Tip potentially re-colored for Hover
+        // If index tip is part of hover and not in a strong fist signal (orange/blue), show hover color.
+        if (isHoverPinchDetected && (!isFistDetected || (!actionGestureCooldownTimer.current && !actionGestureTriggerTimer.current))) {
+            drawingUtilsRef.current.drawLandmarks(canvasCtx, [indexTip], { color: '#90EE90', radius: 4 });
+        }
+        // This ensures index tip shows fist color by default if fisted, then hover color if applicable and not conflicting.
+    } // End of if (res.multiHandLandmarks) for detection and drawing
+
+    // --- Action Gesture (Fist) Logic ---
+    if (!res.multiHandLandmarks?.length) { // Hand lost
+        if (isPerformingActionGesture.current) {
+            isPerformingActionGesture.current = false;
+            if (actionGestureTriggerTimer.current) {
+                clearTimeout(actionGestureTriggerTimer.current);
+                actionGestureTriggerTimer.current = null;
+            }
+        }
+    } else { // Hand is present
+        if (isFistDetected) {
+            if (!isPerformingActionGesture.current && !actionGestureCooldownTimer.current) {
+                isPerformingActionGesture.current = true;
+                if (actionGestureTriggerTimer.current) clearTimeout(actionGestureTriggerTimer.current);
+                actionGestureTriggerTimer.current = setTimeout(() => {
+                    const eventTime = Date.now();
+                    const isDoubleAction = (eventTime - lastActionGestureFireTime.current) < DOUBLE_ACTION_GESTURE_WINDOW;
+                    if (onPinch && actionTriggerPoint) {
+                        onPinch({ x: actionTriggerPoint.x, y: actionTriggerPoint.y, double: isDoubleAction });
+                    }
+                    lastActionGestureFireTime.current = eventTime;
+                    actionGestureTriggerTimer.current = null;
+                    if (actionGestureCooldownTimer.current) clearTimeout(actionGestureCooldownTimer.current);
+                    actionGestureCooldownTimer.current = setTimeout(() => {
+                        actionGestureCooldownTimer.current = null;
+                    }, ACTION_GESTURE_COOLDOWN);
+                }, MIN_ACTION_GESTURE_HOLD_DURATION);
+            }
+        } else { // Not a fist
+            if (isPerformingActionGesture.current) { // Was performing a fist, now released
+                isPerformingActionGesture.current = false;
+                if (actionGestureTriggerTimer.current) { // If it was arming, cancel it
+                    clearTimeout(actionGestureTriggerTimer.current);
+                    actionGestureTriggerTimer.current = null;
                 }
             }
-
-            // 5. Draw thumb tip with its determined color and radius
-            if (thumbTipLandmark) {
-                drawingUtilsRef.current.drawLandmarks(canvasCtx, [thumbTipLandmark], {
-                    color: tipColor,
-                    radius: tipRadius,
-                });
-            }
-
-            // 6. Draw index finger tip with its determined color and radius
-            if (indexTipLandmark) {
-                drawingUtilsRef.current.drawLandmarks(canvasCtx, [indexTipLandmark], {
-                    color: tipColor,
-                    radius: tipRadius,
-                });
-            }
         }
-        // --- MODIFIED DRAWING LOGIC ENDS ---
+
+        // --- Hover Gesture (Thumb-Index Pinch) Logic ---
+        if (isHoverPinchDetected && onPinchMove && hoverTriggerPoint) {
+            onPinchMove({ x: hoverTriggerPoint.x, y: hoverTriggerPoint.y });
+        }
     }
-
-    // --- Pinch and Action Logic (uses 'currentlyPinched' and 'firstHandTipIForLogic') ---
-    if (!res.multiHandLandmarks?.length) { // Handles hand loss if it was previously pinched
-      if (isPhysicallyPinched.current) {
-        isPhysicallyPinched.current = false;
-        if (pinchActionTriggerTimer.current) {
-          clearTimeout(pinchActionTriggerTimer.current);
-          pinchActionTriggerTimer.current = null;
-        }
-      }
-    } else { // Hands are present, continue with pinch move and action logic
-      // --- Continuous onPinchMove for hover/cursor ---
-      if (currentlyPinched && onPinchMove && firstHandTipIForLogic) {
-        onPinchMove({ x: firstHandTipIForLogic.x, y: firstHandTipIForLogic.y });
-      }
-
-      // --- Logic for discrete onPinch actions (single/double) ---
-      if (currentlyPinched) {
-        if (!isPhysicallyPinched.current && !pinchActionCooldownTimer.current) {
-          isPhysicallyPinched.current = true;
-          if (pinchActionTriggerTimer.current) clearTimeout(pinchActionTriggerTimer.current);
-          pinchActionTriggerTimer.current = setTimeout(() => {
-            const eventTime = Date.now();
-            const isDoublePinch = (eventTime - lastOnPinchFireTime.current) < DOUBLE_PINCH_WINDOW;
-            if (onPinch && firstHandTipIForLogic) { // Ensure firstHandTipIForLogic is available
-              onPinch({ x: firstHandTipIForLogic.x, y: firstHandTipIForLogic.y, double: isDoublePinch });
-            }
-            lastOnPinchFireTime.current = eventTime;
-            pinchActionTriggerTimer.current = null;
-            if (pinchActionCooldownTimer.current) clearTimeout(pinchActionCooldownTimer.current);
-            pinchActionCooldownTimer.current = setTimeout(() => {
-              pinchActionCooldownTimer.current = null;
-            }, PINCH_ACTION_COOLDOWN);
-          }, MIN_PINCH_HOLD_DURATION);
-        }
-      } else { // Not currentlyPinched (physically)
-        if (isPhysicallyPinched.current) {
-          isPhysicallyPinched.current = false;
-          if (pinchActionTriggerTimer.current) {
-            clearTimeout(pinchActionTriggerTimer.current);
-            pinchActionTriggerTimer.current = null;
-          }
-        }
-      }
-    }
-    canvasCtx.restore();
+    canvasCtx.restore(); // Called once after all drawing and logic
   };
 
   useEffect(() => {
@@ -221,7 +228,6 @@ export default function HandTracker({ onPinch, onPinchMove }) {
 
     initializeMediaPipe();
 
-    // MODIFIED: Added cleanup for new timers
     return () => {
       if (cameraRef.current && typeof cameraRef.current.stop === 'function') {
         cameraRef.current.stop();
@@ -229,12 +235,12 @@ export default function HandTracker({ onPinch, onPinchMove }) {
       if (handsRef.current && typeof handsRef.current.close === 'function') {
         handsRef.current.close();
       }
-      // Clear any pending timers when the component unmounts
-      if (pinchActionTriggerTimer.current) {
-        clearTimeout(pinchActionTriggerTimer.current);
+      // MODIFIED: Clear renamed timers on unmount
+      if (actionGestureTriggerTimer.current) {
+        clearTimeout(actionGestureTriggerTimer.current);
       }
-      if (pinchActionCooldownTimer.current) {
-        clearTimeout(pinchActionCooldownTimer.current);
+      if (actionGestureCooldownTimer.current) {
+        clearTimeout(actionGestureCooldownTimer.current);
       }
     };
   }, [onPinch, onPinchMove]);
