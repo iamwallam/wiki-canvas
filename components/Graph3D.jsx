@@ -18,48 +18,75 @@ export default function Graph3D({ data }) {
   const fg = useRef();
   const camRef = useRef();
   const rafRef = useRef();
+  
+  // --- START: Re-introducing local state for Option B (Temp Patch) ---
   const [graph, setGraph] = useState(data || dummyData);
+  useEffect(() => {
+    setGraph(data || dummyData); // Sync local graph with incoming data prop
+  }, [data]);
+  // --- END: Re-introducing local state ---
+
   const fetchedUrlsRef = useRef(new Set());
   const lastClickRef = useRef(0);
 
   // Get sprite from node - wrapping to avoid issues if internal naming changes
   const getSprite = (node) => node.__threeObj;
 
+  // --- START: Local mergeGraph helper for Option B (Temp Patch) ---
+  const mergeGraph = (currentGraph, newData) => {
+    const currentNodes = currentGraph?.nodes || [];
+    const currentLinks = currentGraph?.links || [];
+    const newNodesToAdd = newData?.nodes || [];
+    const newLinksToAdd = newData?.links || [];
+
+    const combinedNodes = [...currentNodes];
+    newNodesToAdd.forEach(newNode => {
+      if (!currentNodes.some(existingNode => existingNode.id === newNode.id)) {
+        combinedNodes.push(newNode);
+      }
+    });
+    const combinedLinks = [...currentLinks];
+    newLinksToAdd.forEach(newLink => {
+      const linkExists = currentLinks.some(existingLink =>
+        (existingLink.source === newLink.source && existingLink.target === newLink.target) ||
+        (existingLink.source === newLink.target && existingLink.target === newLink.source)
+      );
+      if (!linkExists) {
+        combinedLinks.push(newLink);
+      }
+    });
+    return { nodes: combinedNodes, links: combinedLinks };
+  };
+  // --- END: Local mergeGraph helper ---
+
   // Update label visibility based on camera distance
   const updateLabels = useCallback(() => {
     if (!camRef.current) return;
     
-    // Cancel any existing RAF to prevent multiple updates in same frame
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     
-    // Schedule update on next animation frame
     rafRef.current = requestAnimationFrame(() => {
-      // Calculate distance from camera to center (origin)
       const distance = camRef.current.position.length();
-      
-      // Add small hysteresis buffer to prevent flickering
       const near = 400 - 20;
       const far = 800 + 20;
       
+      // Reverted to use local 'graph' state due to Option B
       if (!fg.current || !graph || !graph.nodes) return;
       
-      graph.nodes.forEach(node => {
+      graph.nodes.forEach(node => { // Reverted to local 'graph.nodes'
+        if (node.type === "image") return;   
         const sprite = getSprite(node);
         if (!sprite) return;
         
         const weight = typeof node.weight === "number" ? node.weight : 0.3;
         
-        // Apply different LOD levels based on distance
         if (distance < near) {
-          // Close view: full size labels
           sprite.visible = true;
           sprite.textHeight = fontSizeFromWeight(weight);
         } else if (distance < far) {
-          // Medium view: smaller labels
           sprite.visible = true;
           sprite.textHeight = fontSizeFromWeight(weight) * 0.6;
         } else {
-          // Far view: hide labels for non-central nodes
           sprite.visible = node.isCentral === true;
           if (sprite.visible) {
             sprite.textHeight = fontSizeFromWeight(weight) * 0.4;
@@ -67,10 +94,9 @@ export default function Graph3D({ data }) {
         }
       });
       
-      // Refresh graph to apply changes
       fg.current.refresh();
     });
-  }, [graph]);
+  }, [graph, fg, camRef, rafRef]);
 
   const handleEngineStop = useCallback(() => {
     if (!fg.current) return;
@@ -89,37 +115,21 @@ export default function Graph3D({ data }) {
   useEffect(() => {
     if (!fg.current) return;
 
-    // push nodes apart & lengthen links
     fg.current.d3Force("charge").strength(-80);
     fg.current.d3Force("link").distance(60);
-    fg.current.zoomToFit(400);
     
-    // Cleanup function
     return () => {
-      // Remove event listener when component unmounts
       if (fg.current) {
         const controls = fg.current.controls();
         if (controls) {
           controls.removeEventListener('change', updateLabels);
         }
       }
-      // Cancel any pending animation frame
       if (rafRef.current) {
         cancelAnimationFrame(rafRef.current);
       }
     };
   }, [graph, updateLabels]);
-
-  useEffect(() => {
-    setGraph(data || dummyData);
-  }, [data]);
-
-  const mergeGraph = ({ nodes, links }) => {
-    setGraph(prev => ({
-      nodes: [...prev.nodes, ...nodes.filter(n => !prev.nodes.find(p => p.id === n.id))],
-      links: [...prev.links, ...links.filter(l => !prev.links.find(p => p.source === l.source && p.target === l.target))]
-    }));
-  };
 
   const expandNode = async (node) => {
     if (fetchedUrlsRef.current.has(node.url)) return;
@@ -133,7 +143,7 @@ export default function Graph3D({ data }) {
     
     if (!res.ok) return console.error(await res.text());
     const subGraph = await res.json();
-    mergeGraph(subGraph);
+    setGraph(prev => mergeGraph(prev, subGraph));
   };
 
   const handleNodeClick = (node) => {
@@ -156,8 +166,36 @@ export default function Graph3D({ data }) {
         onEngineStop={handleEngineStop}
         onNodeClick={handleNodeClick}
         nodeThreeObject={(node) => {
-          const labelText = node.id;
-          const label = new SpriteText(labelText);
+          // If we've already built a THREE object for this node, re-use it
+          if (node.__threeObj) return node.__threeObj;
+
+          // --- 1️⃣ image sprite branch -------------------------------
+          if (node.type === "image") {
+            // remote images need CORS-safe loader
+            const loader = new THREE.TextureLoader();
+            loader.setCrossOrigin("anonymous");
+
+            const tex = loader.load(node.thumb, () => {
+              // ensure scene refresh after texture finishes loading
+              fg.current?.refresh();
+            });
+            tex.colorSpace = THREE.SRGBColorSpace;     // better colours
+
+            // New material creation for Patch 1
+            const mat = new THREE.SpriteMaterial({ map: tex, transparent: true });
+            mat.depthWrite = false;
+            mat.depthTest  = false;          // ← draw regardless of depth buffer
+
+            const sprite = new THREE.Sprite(mat);
+
+            sprite.scale.set(15, 15);                  // constant screen size
+            sprite.frustumCulled = false;    // ← no culling artefacts (NEW for Patch 1)
+            sprite.renderOrder = 9999;       // ⬅️  draw last, prevents Z-fighting
+            node.__threeObj = sprite;          // 🔑  cache for next render pass
+            return sprite;
+          }
+          // --- 2️⃣ default Wiki label branch -------------------------
+          const label = new SpriteText(node.id);
           label.material.depthWrite = false;
           label.color = "white";
           label.textHeight = fontSizeFromWeight(
