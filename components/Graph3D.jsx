@@ -1,6 +1,6 @@
 "use client";
 import dynamic from "next/dynamic";
-import { useEffect, useRef, useCallback, useState } from "react";
+import { forwardRef, useImperativeHandle, useEffect, useRef, useCallback, useState } from "react";
 import * as THREE from "three";
 import SpriteText from "three-spritetext";
 import { fontSizeFromWeight } from "@/lib/wiki";
@@ -14,8 +14,17 @@ const dummyData = {
   links: [...Array(4)].map((_, i) => ({ source: "n0", target: `n${i + 1}` })),
 };
 
-export default function Graph3D({ data }) {
+function Graph3DInner({ data }, ref) {
   const fg = useRef();
+
+  useImperativeHandle(ref, () => ({
+    camera: () => fg.current?.camera?.(),
+    cameraPosition: (...a) => fg.current?.cameraPosition?.(...a),
+    zoomToNode: (...a) => fg.current?.zoomToNode?.(...a),
+    scene: () => fg.current?.scene?.(),
+    controls: () => fg.current?.controls?.()
+  }));
+
   const camRef = useRef();
   const rafRef = useRef();
   const [graph, setGraph] = useState(data || dummyData);
@@ -158,6 +167,7 @@ export default function Graph3D({ data }) {
         nodeThreeObject={(node) => {
           const labelText = node.id;
           const label = new SpriteText(labelText);
+          label.userData = { node };
           label.material.depthWrite = false;
           label.color = "white";
           label.textHeight = fontSizeFromWeight(
@@ -169,3 +179,5 @@ export default function Graph3D({ data }) {
     </div>
   );
 }
+
+export default forwardRef(Graph3DInner);
