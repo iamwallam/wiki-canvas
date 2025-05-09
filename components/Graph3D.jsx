@@ -1,6 +1,6 @@
 "use client";
 import dynamic from "next/dynamic";
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import * as THREE from "three";
 import SpriteText from "three-spritetext";
 import { fontSizeFromWeight } from "@/lib/wiki";
@@ -9,10 +9,18 @@ const ForceGraph3D = dynamic(() => import("react-force-graph-3d"), {
   ssr: false,
 });
 
+const dummyData = {
+  nodes: [...Array(5)].map((_, i) => ({ id: `n${i}`, url: `https://example.com/node/n${i}` })),
+  links: [...Array(4)].map((_, i) => ({ source: "n0", target: `n${i + 1}` })),
+};
+
 export default function Graph3D({ data }) {
   const fg = useRef();
   const camRef = useRef();
   const rafRef = useRef();
+  const [graph, setGraph] = useState(data || dummyData);
+  const fetchedUrlsRef = useRef(new Set());
+  const lastClickRef = useRef(0);
 
   // Get sprite from node - wrapping to avoid issues if internal naming changes
   const getSprite = (node) => node.__threeObj;
@@ -33,9 +41,9 @@ export default function Graph3D({ data }) {
       const near = 400 - 20;
       const far = 800 + 20;
       
-      if (!fg.current || !data || !data.nodes) return;
+      if (!fg.current || !graph || !graph.nodes) return;
       
-      data.nodes.forEach(node => {
+      graph.nodes.forEach(node => {
         const sprite = getSprite(node);
         if (!sprite) return;
         
@@ -62,7 +70,7 @@ export default function Graph3D({ data }) {
       // Refresh graph to apply changes
       fg.current.refresh();
     });
-  }, [data]);
+  }, [graph]);
 
   const handleEngineStop = useCallback(() => {
     if (!fg.current) return;
@@ -100,31 +108,62 @@ export default function Graph3D({ data }) {
         cancelAnimationFrame(rafRef.current);
       }
     };
-  }, [data, updateLabels]);
+  }, [graph, updateLabels]);
 
-  const dummyData = {
-    nodes: [...Array(5)].map((_, i) => ({ id: `n${i}` })),
-    links: [...Array(4)].map((_, i) => ({ source: "n0", target: `n${i + 1}` })),
+  useEffect(() => {
+    setGraph(data || dummyData);
+  }, [data]);
+
+  const mergeGraph = ({ nodes, links }) => {
+    setGraph(prev => ({
+      nodes: [...prev.nodes, ...nodes.filter(n => !prev.nodes.find(p => p.id === n.id))],
+      links: [...prev.links, ...links.filter(l => !prev.links.find(p => p.source === l.source && p.target === l.target))]
+    }));
+  };
+
+  const expandNode = async (node) => {
+    if (fetchedUrlsRef.current.has(node.url)) return;
+    fetchedUrlsRef.current.add(node.url);
+    
+    const res = await fetch('/api/ingest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: node.url })
+    });
+    
+    if (!res.ok) return console.error(await res.text());
+    const subGraph = await res.json();
+    mergeGraph(subGraph);
+  };
+
+  const handleNodeClick = (node) => {
+    const now = Date.now();
+    if (now - lastClickRef.current < 300) { // double-click (<300 ms)
+      if (!node.type) { // Wikipedia nodes only
+        expandNode(node);
+      }
+    }
+    lastClickRef.current = now;
   };
 
   return (
     <div className="w-screen h-screen">
       <ForceGraph3D
         ref={fg}
-        graphData={data || dummyData}
+        graphData={graph || dummyData}
         nodeVal="val"
         nodeThreeObjectExtend={false}
         onEngineStop={handleEngineStop}
+        onNodeClick={handleNodeClick}
         nodeThreeObject={(node) => {
           const labelText = node.id;
           const label = new SpriteText(labelText);
           label.material.depthWrite = false;
           label.color = "white";
-          // use weight if present, else fallback 0.3
           label.textHeight = fontSizeFromWeight(
             typeof node.weight === "number" ? node.weight : 0.3
           );
-          return label; // a SpriteText IS a Three object
+          return label;
         }}
       />
     </div>
