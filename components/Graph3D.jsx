@@ -4,6 +4,7 @@ import { forwardRef, useImperativeHandle, useEffect, useRef, useCallback, useSta
 import * as THREE from "three";
 import SpriteText from "three-spritetext";
 import { fontSizeFromWeight } from "@/lib/wiki";
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 const ForceGraph3D = dynamic(() => import("react-force-graph-3d"), {
   ssr: false,
@@ -17,13 +18,15 @@ const dummyData = {
 function Graph3DInner({ data, hoverId }, ref) {
   console.log('[Graph3DInner] Rendering. hoverId:', hoverId);
   const fg = useRef();
+  const customOrbitControlsRef = useRef();
+  const mountRef = useRef(null);
 
   useImperativeHandle(ref, () => ({
     camera: () => fg.current?.camera?.(),
     cameraPosition: (...a) => fg.current?.cameraPosition?.(...a),
-    zoomToNode: (...a) => fg.current?.zoomToNode?.(...a),
+    zoomToNode: (nodeObj, ms) => fg.current?.zoomToNode?.(nodeObj, ms),
     scene: () => fg.current?.scene?.(),
-    controls: () => fg.current?.controls?.()
+    controls: () => customOrbitControlsRef.current,
   }));
 
   const [graph, setGraph] = useState(data || dummyData);
@@ -35,26 +38,37 @@ function Graph3DInner({ data, hoverId }, ref) {
   const handleEngineStop = useCallback(() => {
     if (!fg.current) return;
     console.log("Graph engine has stopped or initialized.");
+
+    if (fg.current.camera && fg.current.renderer && mountRef.current) {
+        const camera = fg.current.camera();
+        const rendererDomElement = fg.current.renderer().domElement;
+
+        if (customOrbitControlsRef.current) {
+            customOrbitControlsRef.current.dispose();
+        }
+        
+        customOrbitControlsRef.current = new OrbitControls(camera, rendererDomElement);
+        customOrbitControlsRef.current.enableDamping = true;
+        customOrbitControlsRef.current.dampingFactor = 0.05;
+        
+        console.log("Custom OrbitControls initialized.");
+    } else {
+        console.warn("Could not initialize custom OrbitControls: camera, renderer, or mount point not ready.");
+    }
   }, []);
 
   useEffect(() => {
     if (!fg.current) return;
-
     fg.current.d3Force("charge").strength(-80);
     fg.current.d3Force("link").distance(60);
     fg.current.zoomToFit(400);
     
     return () => {
-      // Cleanup related to updateLabels REMOVED
-      // if (fg.current) {
-      //   const controls = fg.current.controls();
-      //   if (controls) {
-      //     controls.removeEventListener('change', updateLabels);
-      //   }
-      // }
-      // if (rafRef.current) {
-      //   cancelAnimationFrame(rafRef.current);
-      // }
+      if (customOrbitControlsRef.current) {
+        customOrbitControlsRef.current.dispose();
+        customOrbitControlsRef.current = null;
+        console.log("Custom OrbitControls disposed.");
+      }
     };
   }, [graph]);
 
@@ -115,16 +129,12 @@ function Graph3DInner({ data, hoverId }, ref) {
       if (threeObj.color !== targetColor) {
         threeObj.color = targetColor;
       }
-      // Optional: If hover should also affect size, you could modify threeObj.textHeight here.
-      // This is NOT done by default now that updateLabels is removed.
-      // const defaultHeight = fontSizeFromWeight(typeof node.weight === "number" ? node.weight : 0.3);
-      // threeObj.textHeight = (node.id === hoverId) ? defaultHeight * 1.2 : defaultHeight;
       return false; 
     };
   }, [hoverId]);
 
   return (
-    <div className="w-screen h-screen">
+    <div ref={mountRef} className="w-screen h-screen">
       <ForceGraph3D
         ref={fg}
         graphData={graph || dummyData}
@@ -133,6 +143,10 @@ function Graph3DInner({ data, hoverId }, ref) {
         onNodeClick={handleNodeClick}
         nodeThreeObject={handleNodeThreeObject}
         nodeThreeObjectExtend={memoizedNodeThreeObjectExtend}
+        enableZoomInteraction={false}
+        enablePanInteraction={false}
+        enableRotateInteraction={false}
+        enableNodeDrag={false}
       />
     </div>
   );
